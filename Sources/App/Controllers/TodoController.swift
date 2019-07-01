@@ -1,23 +1,55 @@
 import Vapor
+import FluentSQLite
 
 /// Controls basic CRUD operations on `Todo`s.
-final class TodoController {
-    /// Returns a list of all `Todo`s.
-    func index(_ req: Request) throws -> Future<[Todo]> {
-        return Todo.query(on: req).all()
-    }
+final class TodoController: RouteCollection {
 
-    /// Saves a decoded `Todo` to the database.
-    func create(_ req: Request) throws -> Future<Todo> {
-        return try req.content.decode(Todo.self).flatMap { todo in
-            return todo.save(on: req)
-        }
-    }
+	func boot(router: Router) throws {
+		// POST a user in the `httpBody`, we want to save it to the database
+		router.post("todos", "create", use: createTodoHandler)
+		router.get("todos", "all", use: getAllTodosHandler)
+		router.get("todos", Int.parameter, use: getTodoWithIDHandler)
+		router.delete("todos", Int.parameter, use: deleteTodoWithIDHandler)
+	}
 
-    /// Deletes a parameterized `Todo`.
-    func delete(_ req: Request) throws -> Future<HTTPStatus> {
-        return try req.parameters.next(Todo.self).flatMap { todo in
-            return todo.delete(on: req)
-        }.transform(to: .ok)
-    }
+	func getTodoWithIDHandler(_ request: Request) throws -> Future<Todo> {
+		let idParameter = try request.parameters.next(Int.self)
+
+		let todo = Todo
+			.query(on: request)
+//			.filter(\.id, .equal, idParameter)
+			.filter(\.id == idParameter)
+			.first()
+			.unwrap(or: HTTPError(identifier: "com.myFirstAPI", reason: "No todo with that ID: \(idParameter)"))
+
+		return todo
+	}
+
+	func deleteTodoWithIDHandler(_ request: Request) throws -> Future<HTTPResponseStatus> {
+		let idParameter = try request.parameters.next(Int.self)
+		return Todo.query(on: request)
+			.filter(\.id == idParameter)
+			.first()
+			.unwrap(or: HTTPError(identifier: "com.myFirstAPI", reason: "No todo with that ID: \(idParameter)"))
+			.delete(on: request)
+			.transform(to: HTTPResponseStatus.ok)
+	}
+
+	func getAllTodosHandler(_ request: Request) throws -> Future<[Todo]> {
+		return Todo.query(on: request).all()
+	}
+
+	func createTodoHandler(_ request: Request) throws -> Future<HTTPResponseStatus> {
+		let todo = try request.content
+			.decode(Todo.self)
+
+		let result = todo.flatMap({ (todo) -> EventLoopFuture<HTTPResponseStatus> in
+				_ = todo.save(on: request)
+				let promise = request.eventLoop.newPromise(HTTPResponseStatus.self)
+				promise.succeed(result: .created)
+				return promise.futureResult
+			})
+
+		return result
+	}
 }
